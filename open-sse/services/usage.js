@@ -3,6 +3,7 @@
  */
 
 import { getGitHubUsage } from "./usage/github.js";
+import { getCustomUsage, isCustomQuotaProvider } from "./usage/custom.js";
 import { getGeminiUsage, getAntigravityUsage } from "./usage/google.js";
 import { getClaudeUsage, consumeClaudeResetGrant } from "./usage/claude.js";
 import { getCodexUsage, consumeCodexRateLimitResetCredit, getCodexRateLimitResetCredits } from "./usage/codex.js";
@@ -79,6 +80,7 @@ async function getQoderUsageFor(c) {
 
 export async function getUsageForProvider(connection, proxyOptions = null, options = {}) {
   const { provider, accessToken, apiKey, providerSpecificData, projectId } = connection;
+  if (isCustomQuotaProvider(provider)) return getCustomUsage(connection, proxyOptions);
   const providerDataWithProjectId = {
     ...(providerSpecificData || {}),
     ...(projectId ? { projectId } : {}),

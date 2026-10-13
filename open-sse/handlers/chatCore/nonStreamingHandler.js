@@ -2,6 +2,7 @@ import { FORMATS } from "../../translator/formats.js";
 import { needsTranslation } from "../../translator/index.js";
 import { fromOpenAIFinish } from "../../translator/concerns/finishReason.js";
 import { ollamaBodyToOpenAI } from "../../translator/response/ollama-to-openai.js";
+import { responsesBodyToOpenAI } from "../../translator/response/openai-responses.js";
 import { addBufferToUsage, filterUsageForFormat } from "../../utils/usageTracking.js";
 import { createErrorResult } from "../../utils/error.js";
 import { upstreamResponseHeaders } from "../../utils/upstreamHeaders.js";
@@ -12,7 +13,7 @@ import { buildRequestDetail, extractRequestConfig, extractUsageFromResponse, sav
 import { appendRequestLog, saveRequestDetail } from "@/lib/usageDb.js";
 import { decloakToolNames } from "../../utils/claudeCloaking.js";
 import { restoreToolNames } from "../../utils/opencodeFingerprint.js";
-import { ROLE, RESPONSES_ITEM } from "../../translator/schema/index.js";
+import { ROLE, RESPONSES_ITEM, CLAUDE_BLOCK } from "../../translator/schema/index.js";
 
 function parseToolArguments(value) {
   if (!value) return {};
@@ -36,6 +37,10 @@ function openAICompletionToClaudeMessage(responseBody) {
   }
   if (typeof message.content === "string" && message.content.length > 0) {
     content.push({ type: "text", text: message.content });
+  }
+  // Claude has no Chat message.refusal field; surface it as visible text.
+  if (typeof message.refusal === "string" && message.refusal.length > 0) {
+    content.push({ type: CLAUDE_BLOCK.TEXT, text: message.refusal });
   }
   for (const toolCall of message.tool_calls || []) {
     const fn = toolCall.function || {};
@@ -146,6 +151,10 @@ function openAICompletionToResponses(responseBody, customToolNames = null) {
  */
 export function translateNonStreamingResponse(responseBody, targetFormat, sourceFormat, customToolNames = null) {
   if (targetFormat === sourceFormat) return responseBody;
+  if (targetFormat === FORMATS.OPENAI_RESPONSES) {
+    const chatResponse = responsesBodyToOpenAI(responseBody);
+    return sourceFormat === FORMATS.CLAUDE ? openAICompletionToClaudeMessage(chatResponse) : chatResponse;
+  }
   // Provider responded in OpenAI Chat Completions shape but the client speaks
   // Responses API — convert so tool_calls/text surface as Responses `output`.
   if (targetFormat === FORMATS.OPENAI && sourceFormat === FORMATS.OPENAI_RESPONSES) {
@@ -313,6 +322,14 @@ export async function handleNonStreamingResponse({ providerResponse, provider, m
   responseBody = unwrapClineEnvelope(responseBody, provider);
 
   reqLogger.logProviderResponse(providerResponse.status, providerResponse.statusText, providerResponse.headers, responseBody);
+  // Responses can report generation failure inside an HTTP 200 JSON envelope.
+  // Reject it before marking model health successful or recording success usage.
+  if (targetFormat === FORMATS.OPENAI_RESPONSES && (responseBody?.error || responseBody?.status === "failed")) {
+    const error = responseBody.error;
+    const message = error?.message || (typeof error === "string" ? error : null) || "Upstream Responses request failed";
+    appendLog({ status: `FAILED ${HTTP_STATUS.BAD_GATEWAY}` });
+    return createErrorResult(HTTP_STATUS.BAD_GATEWAY, message);
+  }
   if (onRequestSuccess) {
     Promise.resolve()
       .then(onRequestSuccess)

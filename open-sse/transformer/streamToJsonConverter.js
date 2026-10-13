@@ -12,15 +12,16 @@ function processSSEMessage(msg, state) {
 
   const eventMatch = msg.match(/^event:\s*(.+)$/m);
   const dataMatch = msg.match(/^data:\s*(.+)$/m);
-  if (!eventMatch || !dataMatch) return;
+  if (!dataMatch) return;
 
-  const eventType = eventMatch[1].trim();
   const dataStr = dataMatch[1].trim();
   if (dataStr === "[DONE]") return;
 
   let parsed;
   try { parsed = JSON.parse(dataStr); }
   catch { return; }
+  // Responses-compatible servers may omit the optional SSE event: field.
+  const eventType = eventMatch?.[1].trim() || parsed.type;
 
   if (eventType === "response.created") {
     state.responseId = parsed.response?.id || state.responseId;
@@ -28,12 +29,18 @@ function processSSEMessage(msg, state) {
   } else if (eventType === "response.output_item.done") {
     state.items.set(parsed.output_index ?? 0, parsed.item);
   } else if (eventType === "response.completed" || eventType === "response.done") {
-    state.status = "completed";
-    if (parsed.response?.usage) {
-      state.usage.input_tokens = parsed.response.usage.input_tokens || 0;
-      state.usage.output_tokens = parsed.response.usage.output_tokens || 0;
-      state.usage.total_tokens = parsed.response.usage.total_tokens || 0;
+    const response = parsed.response;
+    state.status = response?.status || "completed";
+    state.responseId = response?.id || state.responseId;
+    state.created = response?.created_at || state.created;
+    state.model = response?.model || state.model;
+    // The terminal snapshot is authoritative; compatible servers need not
+    // repeat every output item in a separate output_item.done event.
+    if (Array.isArray(response?.output)) {
+      state.items.clear();
+      response.output.forEach((item, index) => state.items.set(index, item));
     }
+    if (response?.usage) state.usage = { ...response.usage };
   } else if (eventType === "response.failed") {
     state.status = "failed";
   }
@@ -96,6 +103,7 @@ export async function convertResponsesStreamToJson(stream) {
     id: state.responseId || `resp_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
     object: "response",
     created_at: state.created,
+    ...(state.model ? { model: state.model } : {}),
     status: state.status || "completed",
     output,
     usage: state.usage

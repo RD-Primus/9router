@@ -8,7 +8,7 @@ import { buildChunk } from "../concerns/chunk.js";
 import { buildUsage } from "../concerns/usage.js";
 import { fallbackToolCallId } from "../concerns/toolCall.js";
 import { reasoningDelta, extractReasoningText } from "../concerns/reasoning.js";
-import { ROLE, OPENAI_BLOCK, RESPONSES_ITEM, OPENAI_FINISH, MODEL_FALLBACK } from "../schema/index.js";
+import { ROLE, OPENAI_BLOCK, RESPONSES_ITEM, OPENAI_FINISH, CLAUDE_STOP, MODEL_FALLBACK } from "../schema/index.js";
 
 /**
  * Translate OpenAI chunk to Responses API events
@@ -701,6 +701,55 @@ export function openaiResponsesToOpenAIResponse(chunk, state) {
 
   // Ignore other events
   return null;
+}
+
+/** Convert a complete Responses JSON body to the Chat Completions wire. */
+export function responsesBodyToOpenAI(response) {
+  // Do not disguise a failed generation as a successful empty completion.
+  if (response.error || response.status === "failed") return response;
+  const text = [], refusal = [], reasoning = [], toolCalls = [];
+  for (const item of response.output || []) {
+    if (item.type === RESPONSES_ITEM.MESSAGE) {
+      for (const part of item.content || []) {
+        if (part.type === RESPONSES_ITEM.OUTPUT_TEXT && typeof part.text === "string") text.push(part.text);
+        else if (part.type === CLAUDE_STOP.REFUSAL && typeof part.refusal === "string") refusal.push(part.refusal);
+      }
+    } else if (item.type === RESPONSES_ITEM.REASONING) {
+      for (const part of item.summary || []) {
+        if (typeof part.text === "string") reasoning.push(part.text);
+      }
+    } else if (item.type === RESPONSES_ITEM.FUNCTION_CALL || item.type === RESPONSES_ITEM.CUSTOM_TOOL_CALL) {
+      toolCalls.push({
+        id: item.call_id || item.id || fallbackToolCallId(),
+        type: OPENAI_BLOCK.FUNCTION,
+        function: {
+          name: item.name || "",
+          arguments: item.type === RESPONSES_ITEM.CUSTOM_TOOL_CALL
+            ? JSON.stringify({ input: item.input || "" })
+            : (typeof item.arguments === "string" ? item.arguments : JSON.stringify(item.arguments || {})),
+        },
+      });
+    }
+  }
+  const message = { role: ROLE.ASSISTANT, content: text.join("") || (toolCalls.length ? null : "") };
+  if (refusal.length) message.refusal = refusal.join("");
+  if (reasoning.length) message.reasoning_content = reasoning.join("");
+  if (toolCalls.length) message.tool_calls = toolCalls;
+  const usage = response.usage;
+  return {
+    id: response.id || `chatcmpl-${Date.now()}`,
+    object: "chat.completion",
+    created: response.created_at || Math.floor(Date.now() / 1000),
+    model: response.model || MODEL_FALLBACK,
+    choices: [{ index: 0, message, finish_reason: toolCalls.length ? OPENAI_FINISH.TOOL_CALLS
+      : response.status === "incomplete" ? OPENAI_FINISH.LENGTH : OPENAI_FINISH.STOP }],
+    ...(usage ? { usage: buildUsage({
+      promptTokens: usage.input_tokens || 0, completionTokens: usage.output_tokens || 0,
+      totalTokens: usage.total_tokens ?? ((usage.input_tokens || 0) + (usage.output_tokens || 0)),
+      cachedTokens: usage.input_tokens_details?.cached_tokens || 0,
+      reasoningTokens: usage.output_tokens_details?.reasoning_tokens || 0,
+    }) } : {}),
+  };
 }
 
 // Register both directions

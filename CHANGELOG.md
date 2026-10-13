@@ -1,3 +1,13 @@
+# v0.5.99-primus.1 (2026-10-13)
+
+## Fixes and integration
+- Base the isolated Primus fork on upstream v0.5.99, including the Muse transport and reasoning-wire fixes absent from deployed v0.5.95.
+- Honor Responses streaming selection, convert native Responses JSON/SSE to Chat Completions without losing content, tools, reasoning or usage, and terminate translated OpenAI streams with exactly one `[DONE]`.
+- Include custom OpenAI/Anthropic-compatible connections in Quota Tracker with explicit unsupported/N/A quota states; provide origin-bound OpenRouter key-budget discovery without assuming account-credit access.
+- Keep model-specific 404/410 diagnostics separate from connection-wide credential health and preserve unrelated cooldowns during successful-model recovery.
+- Distinguish custom-provider HTTP gateway/endpoint/authentication probe failures instead of incorrectly labeling every upstream failure as an invalid API key.
+- Add targeted regression coverage and an explicit production-image Compose override; preserve the original production configuration and runtime data.
+
 # v0.5.99 (2026-10-08)
 
 ## Features

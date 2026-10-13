@@ -29,6 +29,17 @@ export function getConnectionLabel(connection) {
     || null;
 }
 
+// Unknown quota must never enable an account during a bulk availability action.
+export function isQuotaAvailableForBulkEnable(entry, hasError = false) {
+  if (hasError || entry?.supported === false || entry?.message || !entry?.quotas?.length) return false;
+  return entry.quotas.every((quota) => {
+    if (quota.isCreditBalance === true) return Number.isFinite(quota.total) && quota.total > 0;
+    if (quota.unlimited === true) return true;
+    const remaining = getRemainingPercentage(quota);
+    return Number.isFinite(remaining) && remaining > DEPLETED_QUOTA_THRESHOLD;
+  });
+}
+
 export function getConnectionQuotaRemaining(connection, quotaData) {
   const quota = quotaData[connection.id]?.quotas?.[0];
   if (!quota) return Number.POSITIVE_INFINITY;
@@ -355,6 +366,13 @@ export function getHiddenQuotaRows(provider, quotas = [], quotaVisibility = {}) 
  */
 export function parseQuotaData(provider, data) {
   if (!data || typeof data !== "object") return [];
+
+  // Custom quota rows are already normalized by the documented adapter.
+  // No generic defaults: missing/unlimited limits must not become 100%.
+  if (provider.startsWith("openai-compatible-") || provider.startsWith("anthropic-compatible-")) {
+    if (data.supported !== true) return [];
+    return Object.entries(data.quotas || {}).map(([name, quota]) => ({ name, ...quota }));
+  }
 
   const normalizedQuotas = [];
 

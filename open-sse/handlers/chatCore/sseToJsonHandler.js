@@ -182,7 +182,13 @@ export function parseSSEToOpenAIResponse(rawSSE, fallbackModel) {
  */
 export async function handleForcedSSEToJson({ providerResponse, sourceFormat, targetFormat, provider, model, body, stream, translatedBody, finalBody, requestStartTime, connectionId, apiKey, clientRawRequest, onRequestSuccess, customToolNames, toolNameMap, trackDone, appendLog, reqTag, log }) {
   const contentType = providerResponse.headers.get("content-type") || "";
-  const isSSE = contentType.includes("text/event-stream") || (contentType === "" && isResponsesProvider(provider));
+  let isSSE = contentType.includes("text/event-stream");
+  if (!contentType && (isResponsesProvider(provider) || targetFormat === FORMATS.OPENAI_RESPONSES)) {
+    // Custom Responses nodes are not in the static provider registry. Sniff
+    // their unlabelled bodies without consuming genuine JSON on the fallback.
+    const raw = await providerResponse.clone().text();
+    isSSE = /^(?:event|data):/m.test(raw);
+  }
   if (!isSSE) return null; // not handled here
 
   trackDone();

@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
-import { getProviderConnections } from "@/lib/localDb";
+import { getProviderConnections, getProviderNodes } from "@/lib/localDb";
 import { backfillCodexEmails } from "@/lib/oauth/providers";
-import { USAGE_APIKEY_PROVIDERS, USAGE_SUPPORTED_PROVIDERS } from "@/shared/constants/providers";
+import { USAGE_APIKEY_PROVIDERS, USAGE_SUPPORTED_PROVIDERS, isOpenAICompatibleProvider, isAnthropicCompatibleProvider } from "@/shared/constants/providers";
 
 const SAFE_FIELDS = [
   "id", "provider", "authType", "name", "email", "displayName",
@@ -44,6 +44,9 @@ function sanitize(c) {
 }
 
 function isUsageEligible(connection) {
+  if (isOpenAICompatibleProvider(connection.provider) || isAnthropicCompatibleProvider(connection.provider)) {
+    return ["apikey", "api_key", "oauth"].includes(connection.authType);
+  }
   return USAGE_SUPPORTED_PROVIDERS.includes(connection.provider) && (
     connection.authType === "oauth" || USAGE_APIKEY_PROVIDERS.includes(connection.provider)
   );
@@ -88,6 +91,10 @@ export async function GET(request) {
     const allConnections = await getProviderConnections();
     const eligibleConnections = allConnections.filter(isUsageEligible);
     const providerOptions = Array.from(new Set(eligibleConnections.map((conn) => conn.provider))).sort();
+    const nodes = await getProviderNodes();
+    const providerNames = Object.fromEntries(nodes
+      .filter((node) => providerOptions.includes(node.id))
+      .map((node) => [node.id, node.name]));
 
     const providerFilteredConnections = eligibleConnections.filter((conn) => (
       provider === "all" || conn.provider === provider
@@ -104,11 +111,15 @@ export async function GET(request) {
     const totalPages = Math.max(1, Math.ceil(total / pageSize));
     const currentPage = Math.min(page, totalPages);
     const offset = (currentPage - 1) * pageSize;
-    const pageConnections = sortedConnections.slice(offset, offset + pageSize).map(sanitize);
+    const pageConnections = sortedConnections.slice(offset, offset + pageSize).map((connection) => ({
+      ...sanitize(connection),
+      ...(providerNames[connection.provider] ? { providerName: providerNames[connection.provider] } : {}),
+    }));
 
     return NextResponse.json({
       connections: pageConnections,
       providerOptions,
+      providerNames,
       pagination: {
         page: currentPage,
         pageSize,

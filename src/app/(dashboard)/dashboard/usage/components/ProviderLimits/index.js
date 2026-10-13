@@ -8,6 +8,7 @@ import Toggle from "@/shared/components/Toggle";
 import Tooltip from "@/shared/components/Tooltip";
 import {
   parseQuotaData,
+  isQuotaAvailableForBulkEnable,
   calculatePercentage,
   filterQuotasByVisibility,
   getHiddenQuotaRows,
@@ -196,6 +197,7 @@ export default function ProviderLimits() {
     } catch { /* non-fatal: URL sync is best-effort */ }
   }, [pathname, router, searchParams]);
   const [providerOptions, setProviderOptions] = useState([]);
+  const [providerNames, setProviderNames] = useState({});
   const [accountFilter, setAccountFilter] = useState("all");
   const [quotaSortMode, setQuotaSortMode] = useState("default");
   const [quotaVisibility, setQuotaVisibility] = useState({});
@@ -248,6 +250,7 @@ export default function ProviderLimits() {
 
         setConnections(connectionList);
         setProviderOptions(getProviderOptions(data.providerOptions));
+        setProviderNames(data.providerNames || {});
         setPagination(nextPagination);
         setTotals(nextTotals);
         setPage(getPaginationPageValue(data.pagination, targetPage));
@@ -311,13 +314,13 @@ export default function ProviderLimits() {
       }
 
       const data = await response.json();
-      console.log(`[ProviderLimits] Got quota for ${provider}:`, data);
 
       // Parse quota data using provider-specific parser
       const parsedQuotas = parseQuotaData(provider, data);
 
       const quotaEntry = {
         quotas: parsedQuotas,
+        supported: data.supported,
         plan: data.plan || null,
         message: data.message || null,
         raw: data,
@@ -821,13 +824,13 @@ export default function ProviderLimits() {
 
   const handleEnableAvailable = () => {
     const ids = sortedConnections
-      .filter((c) => !(c.isActive ?? true) && !isConnectionDepleted(c))
+      .filter((c) => !(c.isActive ?? true) && isQuotaAvailableForBulkEnable(quotaData[c.id], Boolean(errors[c.id] || loading[c.id])))
       .map((c) => c.id);
     bulkSetActive(ids, true);
   };
 
   const selectedProviderLabel =
-    providerFilter === "all" ? "All providers" : providerLabel(providerFilter);
+    providerFilter === "all" ? "All providers" : providerNames[providerFilter] || providerLabel(providerFilter);
   const hasEligibleConnections = totals.eligibleConnections > 0;
   const hasVisibleConnections = sortedConnections.length > 0;
   const emptyState = getConnectionsEmptyMessage(
@@ -966,7 +969,7 @@ export default function ProviderLimits() {
                           fallbackText={provider.slice(0, 2).toUpperCase()}
                         />
                         <span className="font-medium">
-                          {providerLabel(provider)}
+                          {providerNames[provider] || providerLabel(provider)}
                         </span>
                         {providerFilter === provider && (
                           <span className="material-symbols-outlined ml-auto text-[20px]">
@@ -1142,7 +1145,7 @@ export default function ProviderLimits() {
                     </div>
                     <div className="min-w-0">
                       <h3 className="text-sm font-semibold text-text-primary truncate">
-                        {providerLabel(conn.provider)}
+                        {conn.providerName || providerLabel(conn.provider)}
                       </h3>
                       {getConnectionLabel(conn) ? (
                         <p className="text-xs text-text-muted truncate">
@@ -1338,6 +1341,7 @@ export default function ProviderLimits() {
                   </div>
                 ) : quota?.message ? (
                   <div className="text-center py-5">
+                    {quota.supported === false && <p className="text-xs font-medium text-text-muted">N/A — Quota unsupported</p>}
                     <p className="text-xs text-text-muted">{quota.message}</p>
                   </div>
                 ) : (

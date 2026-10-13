@@ -28,6 +28,16 @@ describe("usage dispatch", () => {
     expect(res).toEqual({ message: "Usage API not implemented for totally-unknown" });
   });
 
+  it("custom LLM providers without a documented quota API return explicit unsupported N/A", async () => {
+    const { getUsageForProvider } = await load();
+    for (const provider of ["openai-compatible-chat-meta", "anthropic-compatible-tokenme"]) {
+      const res = await getUsageForProvider({ provider, apiKey: "test-only", providerSpecificData: { baseUrl: "https://api.meta.ai/v1" } });
+      expect(res).toMatchObject({ supported: false, quotas: {} });
+      expect(res.message).toMatch(/unsupported.*N\/A/i);
+      expect(res).not.toHaveProperty("remainingPercentage");
+    }
+  });
+
   it("every supported provider routes to its handler (no fallback message)", async () => {
     const { getUsageForProvider } = await load();
     for (const provider of SUPPORTED) {

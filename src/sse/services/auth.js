@@ -1,4 +1,4 @@
-import { getProviderConnections, validateApiKey, updateProviderConnection, getSettings, getProxyPools } from "@/lib/localDb";
+import { getProviderConnections, getProviderConnectionById, validateApiKey, updateProviderConnection, getSettings, getProxyPools } from "@/lib/localDb";
 import { resolveConnectionProxyConfig, pickProxyPoolId } from "@/lib/network/connectionProxy";
 import { formatRetryAfter, checkFallbackError, isModelLockActive, buildModelLockUpdate, getEarliestModelLockUntil } from "open-sse/services/accountFallback.js";
 import { MAX_RATE_LIMIT_COOLDOWN_MS } from "open-sse/config/errorConfig.js";
@@ -126,13 +126,14 @@ export async function getProviderCredentials(provider, excludeConnectionIds = nu
       const earliest = expiries.sort()[0] || null;
       if (earliest) {
         const earliestConn = lockedConns[0];
+        const modelError = model ? earliestConn?.[`modelError_${model}`] : null;
         log.warn("AUTH", `${provider} | all ${connections.length} accounts locked for ${model || "all"} (${formatRetryAfter(earliest)}) | lastError=${earliestConn?.lastError?.slice(0, 50)}`);
         return {
           allRateLimited: true,
           retryAfter: earliest,
           retryAfterHuman: formatRetryAfter(earliest),
-          lastError: earliestConn?.lastError || null,
-          lastErrorCode: earliestConn?.errorCode || null
+          lastError: modelError?.lastError || earliestConn?.lastError || null,
+          lastErrorCode: modelError?.errorCode || earliestConn?.errorCode || null
         };
       }
       log.warn("AUTH", `${provider} | all ${connections.length} accounts unavailable`);
@@ -224,7 +225,7 @@ export async function getProviderCredentials(provider, excludeConnectionIds = nu
       // Include current status for optimization check
       testStatus: connection.testStatus,
       lastError: connection.lastError,
-      // Pass full connection for clearAccountError to read modelLock_* keys
+      // Retain the selection snapshot for callers; recovery reloads fresh lock state.
       _connection: connection
     };
   } finally {
@@ -267,29 +268,32 @@ export async function markAccountUnavailable(connectionId, status, errorText, pr
   } else {
     ({ shouldFallback, cooldownMs, newBackoffLevel } = checkFallbackError(status, errorText, backoffLevel, resolveProviderId(provider)));
   }
-  if (!shouldFallback) return { shouldFallback: false, cooldownMs: 0 };
+  const modelRoutingError = model && (status === 404 || status === 410);
+  if (!shouldFallback && !modelRoutingError) return { shouldFallback: false, cooldownMs: 0 };
 
   const reason = typeof errorText === "string" ? errorText.slice(0, 200) : "Provider error";
-  const lockUpdate = buildModelLockUpdate(githubResetAtMs ? null : model, cooldownMs);
-
+  const errorState = { lastError: reason, errorCode: status, lastErrorAt: new Date().toISOString() };
+  // A retired model may not trigger fallback; retain its diagnostic without adding a lock.
+  const lockUpdate = shouldFallback ? buildModelLockUpdate(githubResetAtMs ? null : model, cooldownMs) : {};
   await updateProviderConnection(connectionId, {
     ...lockUpdate,
-    testStatus: "unavailable",
-    lastError: reason,
-    errorCode: status,
-    lastErrorAt: new Date().toISOString(),
+    ...(modelRoutingError
+      ? { [`modelError_${model}`]: errorState }
+      : { testStatus: "unavailable", ...errorState }),
     backoffLevel: newBackoffLevel ?? backoffLevel
   });
 
   const lockKey = Object.keys(lockUpdate)[0];
   const connName = conn?.displayName || conn?.name || conn?.email || connectionId.slice(0, 8);
-  log.warn("AUTH", `${connName} locked ${lockKey} for ${Math.round(cooldownMs / 1000)}s [${status}]`);
+  log.warn("AUTH", lockKey
+    ? `${connName} locked ${lockKey} for ${Math.round(cooldownMs / 1000)}s [${status}]`
+    : `${connName} model ${model} error [${status}]`);
 
   if (provider && status && reason) {
     console.error(`❌ ${provider} [${status}]: ${reason}`);
   }
 
-  return { shouldFallback: true, cooldownMs };
+  return { shouldFallback, cooldownMs };
 }
 
 /**
@@ -303,11 +307,15 @@ export async function markAccountUnavailable(connectionId, status, errorText, pr
  */
 export async function clearAccountError(connectionId, currentConnection, model = null) {
   if (!connectionId || connectionId === "noauth") return;
-  const conn = currentConnection._connection || currentConnection;
+  // Credentials carry a selection-time snapshot; another request may have locked a model since then.
+  const conn = await getProviderConnectionById(connectionId);
+  if (!conn) return;
   const now = Date.now();
   const allLockKeys = Object.keys(conn).filter(k => k.startsWith("modelLock_"));
 
-  if (!conn.testStatus && !conn.lastError && allLockKeys.length === 0) return;
+  const succeededErrorKey = model ? `modelError_${model}` : null;
+  const hasSucceededModelError = succeededErrorKey && conn[succeededErrorKey];
+  if (!conn.testStatus && !conn.lastError && allLockKeys.length === 0 && !hasSucceededModelError) return;
 
   // Keys to clear: current model's lock + all expired locks
   const keysToClear = allLockKeys.filter(k => {
@@ -317,7 +325,7 @@ export async function clearAccountError(connectionId, currentConnection, model =
     return expiry && new Date(expiry).getTime() <= now;   // expired
   });
 
-  if (keysToClear.length === 0 && conn.testStatus !== "unavailable" && !conn.lastError) return;
+  if (keysToClear.length === 0 && conn.testStatus !== "unavailable" && !conn.lastError && !hasSucceededModelError) return;
 
   // Check if any active locks remain after clearing
   const remainingActiveLocks = allLockKeys.filter(k => {
@@ -327,9 +335,11 @@ export async function clearAccountError(connectionId, currentConnection, model =
   });
 
   const clearObj = Object.fromEntries(keysToClear.map(k => [k, null]));
+  if (hasSucceededModelError) clearObj[succeededErrorKey] = null;
 
-  // Only reset error state if no active locks remain
-  if (remainingActiveLocks.length === 0) {
+  // A legacy model-only error must not keep healthy models marked unavailable.
+  const legacyModelError = [404, 410].includes(Number(conn.errorCode)) && !conn.modelLock___all;
+  if (remainingActiveLocks.length === 0 || legacyModelError) {
     Object.assign(clearObj, {
       testStatus: "active",
       lastError: null,
@@ -339,7 +349,7 @@ export async function clearAccountError(connectionId, currentConnection, model =
     });
   }
 
-  await updateProviderConnection(connectionId, clearObj);
+  await updateProviderConnection(connectionId, clearObj, { resetHealth: false });
 }
 
 /**

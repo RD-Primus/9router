@@ -15,9 +15,17 @@ export async function POST(request, { params }) {
       valid: result.valid,
       error: result.error,
       refreshed: result.refreshed || false,
+      ...(result.probe ? {
+        status: result.status,
+        category: result.category,
+        probe: result.probe,
+        inferenceVerified: result.inferenceVerified,
+        ...(result.message ? { message: result.message } : {}),
+      } : {}),
     });
-  } catch (error) {
-    console.log("Error testing connection:", error);
+  } catch {
+    // Error objects can contain upstream bodies, credentialed URLs, or tokens.
+    console.log("Error testing connection: unexpected internal failure");
     return NextResponse.json({ error: "Test failed" }, { status: 500 });
   }
 }

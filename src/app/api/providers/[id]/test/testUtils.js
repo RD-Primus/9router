@@ -21,6 +21,7 @@ import {
   KIMCHI_CONFIG,
 } from "@/lib/oauth/constants/oauth";
 import { buildClineHeaders } from "@/shared/utils/clineAuth";
+import { classifyCustomProbeResult } from "./customProbeResult.js";
 
 // OAuth provider test endpoints
 const OAUTH_TEST_CONFIG = {
@@ -502,9 +503,9 @@ async function testApiKeyConnection(connection, effectiveProxy = null) {
       const res = await fetchWithConnectionProxy(`${modelsBase.replace(/\/$/, "")}/models`, {
         headers: { "Authorization": `Bearer ${connection.apiKey}` },
       }, effectiveProxy);
-      return { valid: res.ok, error: res.ok ? null : "Invalid API key or base URL" };
+      return classifyCustomProbeResult(res, "models");
     } catch (err) {
-      return { valid: false, error: err.message };
+      return classifyCustomProbeResult({ error: err }, "models");
     }
   }
 
@@ -530,11 +531,10 @@ async function testApiKeyConnection(connection, effectiveProxy = null) {
           messages: [{ role: "user", content: "test" }],
         }),
       }, effectiveProxy);
-      // 400/529 still confirms key accepted; only 401/403 = bad key
-      const valid = res.status !== 401 && res.status !== 403;
-      return { valid, error: valid ? null : "Invalid API key or base URL" };
+      // Non-auth failures do not prove credentials or inference work.
+      return classifyCustomProbeResult(res, "messages");
     } catch (err) {
-      return { valid: false, error: err.message };
+      return classifyCustomProbeResult({ error: err }, "messages");
     }
   }
 
@@ -947,5 +947,18 @@ export async function testSingleConnection(id) {
 
   await updateProviderConnection(id, updateData);
 
-  return { valid: result.valid, error: result.error, refreshed: !!result.refreshed, latencyMs, testedAt: new Date().toISOString() };
+  return {
+    valid: result.valid,
+    error: result.error,
+    refreshed: !!result.refreshed,
+    latencyMs,
+    testedAt: new Date().toISOString(),
+    ...(result.probe ? {
+      status: result.status,
+      category: result.category,
+      probe: result.probe,
+      inferenceVerified: result.inferenceVerified,
+      ...(result.message ? { message: result.message } : {}),
+    } : {}),
+  };
 }

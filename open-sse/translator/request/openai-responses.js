@@ -321,7 +321,7 @@ function buildReasoningInputItem(msg) {
 export function openaiToOpenAIResponsesRequest(model, body, stream, credentials) {
   // Body already in Responses API format (e.g. Cursor CLI calling /chat/completions with input[])
   if (body.input) {
-    const out = { ...body, model, stream: true };
+    const out = { ...body, model, stream };
     if (out.max_output_tokens === undefined) {
       if (out.max_completion_tokens !== undefined) out.max_output_tokens = out.max_completion_tokens;
       else if (out.max_tokens !== undefined) out.max_output_tokens = out.max_tokens;
@@ -334,7 +334,7 @@ export function openaiToOpenAIResponsesRequest(model, body, stream, credentials)
   const result = {
     model,
     input: [],
-    stream: true,
+    stream,
     store: false
   };
 

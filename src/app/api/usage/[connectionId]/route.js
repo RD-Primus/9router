@@ -1,8 +1,9 @@
 // Ensure proxyFetch is loaded to patch globalThis.fetch
 import "open-sse/index.js";
 
-import { getProviderConnectionById, updateProviderConnection } from "@/lib/localDb";
+import { getProviderConnectionById, getProviderNodeById, updateProviderConnection } from "@/lib/localDb";
 import { getUsageForProvider } from "open-sse/services/usage.js";
+import { isCustomQuotaProvider, hasCustomQuotaAdapter, unsupportedCustomQuota } from "open-sse/services/usage/custom.js";
 import { isUnrecoverableRefreshError } from "open-sse/services/tokenRefresh.js";
 import { getExecutor } from "open-sse/executors/index.js";
 import { resolveConnectionProxyConfig } from "@/lib/network/connectionProxy";
@@ -143,6 +144,21 @@ export async function GET(request, { params }) {
       return Response.json({ error: "Connection not found" }, { status: 404 });
     }
 
+    const isCustom = isCustomQuotaProvider(connection.provider);
+    if (isCustom) {
+      // Nodes can be edited after a connection was created. Bind quota identity
+      // to the current node, never stale snapshots or a friendly display name.
+      const node = await getProviderNodeById(connection.provider);
+      if (!node || !["openai-compatible", "anthropic-compatible"].includes(node.type)) {
+        return Response.json(unsupportedCustomQuota());
+      }
+      connection = {
+        ...connection,
+        providerSpecificData: { ...connection.providerSpecificData, baseUrl: node.baseUrl },
+      };
+      if (!hasCustomQuotaAdapter(connection)) return Response.json(unsupportedCustomQuota());
+    }
+
     // Allow OAuth connections, plus whitelisted apikey providers (glm/minimax/kiro/...)
     // Kiro's headless api-key flow persists authType "api_key" (underscore) while
     // generic apikey providers persist "apikey" — accept both spellings here.
@@ -152,7 +168,7 @@ export async function GET(request, { params }) {
     const isApikeyEligible =
       isApikeyAuth && USAGE_APIKEY_PROVIDERS.includes(connection.provider);
 
-    if (!isOAuth && !isApikeyEligible) {
+    if (!isOAuth && !isApikeyEligible && !(isCustom && isApikeyAuth)) {
       return Response.json({ message: "Usage not available for this connection" });
     }
 
@@ -167,7 +183,7 @@ export async function GET(request, { params }) {
     };
 
     // Refresh credentials only for OAuth connections (apikey has no token refresh)
-    if (isOAuth) {
+    if (isOAuth && !isCustom) {
       try {
         const result = await refreshAndUpdateCredentials(connection, false, proxyOptions);
         connection = result.connection;
@@ -184,7 +200,7 @@ export async function GET(request, { params }) {
 
     // If provider returned an auth-expired message instead of throwing,
     // force-refresh token and retry once (OAuth only)
-    if (isOAuth && isAuthExpiredMessage(usage) && connection.refreshToken) {
+    if (isOAuth && !isCustom && isAuthExpiredMessage(usage) && connection.refreshToken) {
       try {
         const retryResult = await refreshAndUpdateCredentials(connection, true, proxyOptions);
         connection = retryResult.connection;
