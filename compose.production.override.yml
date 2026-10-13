@@ -4,5 +4,5 @@
 #   up -d --no-deps --pull never 9router
 services:
   9router:
-    image: rd-primus/9router:0.5.99-primus.1
+    image: rd-primus/9router:0.5.99-primus.2
     pull_policy: never

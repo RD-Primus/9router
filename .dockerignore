@@ -11,6 +11,8 @@ node_modules
 **/node_modules
 .next
 .next-stage
+.next-pricing-ui-dev
+.next-pricing-ui-build
 out
 build
 dist

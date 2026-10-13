@@ -1,3 +1,11 @@
+# v0.5.99-primus.2 (2026-10-13)
+
+## Pricing editor
+- Add searchable mobile-friendly Pricing navigation and per-provider/model five-field USD/1M token editing with manual/default/imported/unknown states.
+- Reuse existing manual pricing KV and tracking resolution; validate finite nonnegative rates, preserve explicit zero and sparse overrides, and support model-only reset.
+- Import current official OpenRouter public catalog prices only into verified OpenRouter routing identities; manual overrides remain higher priority, reset restores imported rates, missing data remains unknown.
+- No AI crawler, Hugging Face pricing guess, historical cost recalculation, or cross-gateway price substitution.
+
 # v0.5.99-primus.1 (2026-10-13)
 
 ## Fixes and integration

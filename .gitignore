@@ -16,6 +16,8 @@
 # next.js
 /.next/
 /.next-stage/
+/.next-pricing-ui-dev/
+/.next-pricing-ui-build/
 /.next-cli-build/
 /out/
 cli/.build-home/
