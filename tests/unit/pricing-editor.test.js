@@ -50,8 +50,10 @@ describe("pricing editor catalog", () => {
       pricing: { ...defaultPricing("openai-compatible-scratch", "gpt-4o"), input: 0 },
     }));
     expect(result.rows).toContainEqual(expect.objectContaining({ provider: "openai-compatible-scratch", model: "New Model", source: "unknown" }));
-    expect(result.rows).toContainEqual(expect.objectContaining({ provider: "codex", model: "gpt-5.5", nativeModel: "gpt-5.5", source: "default" }));
-    expect(result.rows).toContainEqual(expect.objectContaining({ provider: "codex", model: "gpt-5.5-review", nativeModel: "gpt-5.5" }));
+    // Upstream v0.5.104 retires GPT-5.5; verify a current literal/review pair.
+    expect(result.rows).toContainEqual(expect.objectContaining({ provider: "codex", model: "gpt-5.6-sol", nativeModel: "gpt-5.6-sol", source: "default" }));
+    expect(result.rows).toContainEqual(expect.objectContaining({ provider: "codex", model: "gpt-5.6-sol-review", nativeModel: "gpt-5.6-sol" }));
+    expect(result.rows.some((row) => row.provider === "codex" && row.model === "gpt-5.5")).toBe(false);
     expect(new Set(result.rows.map((row) => JSON.stringify([row.provider, row.model]))).size).toBe(result.rows.length);
     const writesBefore = adapter.all("SELECT * FROM kv ORDER BY scope, key");
     await editor.getPricingEditor();
